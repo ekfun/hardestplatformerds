@@ -1,0 +1,765 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>The Hardest Platformer in the World</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background: #111;
+            color: #fff;
+            font-family: 'Courier New', monospace;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            height: 100vh;
+        }
+        
+        #game-container {
+            position: relative;
+            margin-top: 20px;
+        }
+        
+        #game-canvas {
+            border: 2px solid #444;
+            background: #000;
+            box-shadow: 0 0 20px rgba(0, 255, 255, 0.3);
+        }
+        
+        #ui {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            font-size: 16px;
+            color: #0ff;
+            text-shadow: 0 0 5px #0ff;
+            pointer-events: none;
+        }
+        
+        #level-indicator {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            font-size: 20px;
+            color: #f0f;
+            text-shadow: 0 0 5px #f0f;
+        }
+        
+        #death-counter {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            font-size: 16px;
+            color: #f00;
+            text-shadow: 0 0 5px #f00;
+        }
+        
+        #controls {
+            margin-top: 10px;
+            color: #888;
+            font-size: 14px;
+        }
+        
+        #python-console {
+            display: none; /* Would use Pyodide for actual Python in browser */
+        }
+        
+        .hidden {
+            display: none;
+        }
+        
+        #level-complete {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 40px;
+            color: #0f0;
+            text-shadow: 0 0 10px #0f0;
+            text-align: center;
+            opacity: 0;
+            transition: opacity 0.5s;
+        }
+        
+        #game-over {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 60px;
+            color: #f00;
+            text-shadow: 0 0 15px #f00;
+            text-align: center;
+            opacity: 0;
+            pointer-events: none;
+        }
+        
+        #restart-btn {
+            margin-top: 20px;
+            padding: 10px 20px;
+            background: #333;
+            color: #0ff;
+            border: 1px solid #0ff;
+            cursor: pointer;
+            font-family: 'Courier New', monospace;
+            font-size: 16px;
+            transition: all 0.3s;
+        }
+        
+        #restart-btn:hover {
+            background: #0ff;
+            color: #000;
+            box-shadow: 0 0 15px #0ff;
+        }
+    </style>
+</head>
+<body>
+    <h1>THE HARDEST PLATFORMER IN THE WORLD</h1>
+    <div id="game-container">
+        <canvas id="game-canvas" width="800" height="500"></canvas>
+        <div id="ui">
+            <div>SPEED: <span id="speed-display">0</span></div>
+            <div>JUMPS: <span id="jumps-display">0</span></div>
+        </div>
+        <div id="level-indicator">LEVEL 1</div>
+        <div id="death-counter">DEATHS: 0</div>
+        <div id="level-complete">LEVEL COMPLETE!</div>
+        <div id="game-over">GAME OVER<br><span style="font-size: 20px;">Press R to restart</span></div>
+    </div>
+    <div id="controls">
+        ARROW KEYS to move | SPACE to jump | R to restart | SHIFT to sprint
+    </div>
+    <button id="restart-btn">RESTART GAME</button>
+    
+    <div id="python-console"></div>
+    
+    <script>
+        // Game constants
+        const GRAVITY = 0.5;
+        const FRICTION = 0.9;
+        const AIR_RESISTANCE = 0.95;
+        const MAX_SPEED = 10;
+        const JUMP_FORCE = -12;
+        const SPRINT_MULTIPLIER = 1.5;
+        const PLAYER_WIDTH = 20;
+        const PLAYER_HEIGHT = 40;
+        
+        // Game variables
+        let canvas, ctx;
+        let player = {
+            x: 50,
+            y: 450,
+            width: PLAYER_WIDTH,
+            height: PLAYER_HEIGHT,
+            velX: 0,
+            velY: 0,
+            isJumping: false,
+            jumps: 0,
+            deaths: 0,
+            color: '#0ff'
+        };
+        
+        let currentLevel = 1;
+        let platforms = [];
+        let spikes = [];
+        let movingPlatforms = [];
+        let teleporters = [];
+        let keys = {};
+        let gameRunning = true;
+        let levelComplete = false;
+        let levelCompleteTimer = 0;
+        let totalJumps = 0;
+        let totalDeaths = 0;
+        
+        // Initialize game
+        function init() {
+            canvas = document.getElementById('game-canvas');
+            ctx = canvas.getContext('2d');
+            
+            document.getElementById('restart-btn').addEventListener('click', restartGame);
+            
+            // Keyboard event listeners
+            window.addEventListener('keydown', (e) => {
+                keys[e.key] = true;
+                
+                // Restart game
+                if (e.key === 'r' || e.key === 'R') {
+                    restartGame();
+                }
+            });
+            
+            window.addEventListener('keyup', (e) => {
+                keys[e.key] = false;
+            });
+            
+            // Initialize first level
+            loadLevel(currentLevel);
+            
+            // Start game loop
+            requestAnimationFrame(gameLoop);
+        }
+        
+        // Game loop
+        function gameLoop() {
+            if (!gameRunning) return;
+            
+            update();
+            render();
+            
+            requestAnimationFrame(gameLoop);
+        }
+        
+        // Update game state
+        function update() {
+            if (levelComplete) {
+                levelCompleteTimer++;
+                if (levelCompleteTimer > 120) { // 2 seconds at 60fps
+                    levelComplete = false;
+                    levelCompleteTimer = 0;
+                    currentLevel++;
+                    if (currentLevel <= 5) {
+                        loadLevel(currentLevel);
+                    } else {
+                        // Game beaten
+                        document.getElementById('level-complete').textContent = 'YOU BEAT THE GAME!';
+                        document.getElementById('level-complete').style.color = '#ff0';
+                        document.getElementById('level-complete').style.textShadow = '0 0 15px #ff0';
+                        levelCompleteTimer = 0;
+                    }
+                }
+                return;
+            }
+            
+            // Player movement
+            player.velY += GRAVITY;
+            
+            // Horizontal movement
+            if (keys['ArrowLeft'] || keys['a'] || keys['A']) {
+                const speed = (keys['Shift'] ? MAX_SPEED * SPRINT_MULTIPLIER : MAX_SPEED) * 0.8;
+                player.velX = -speed;
+            } else if (keys['ArrowRight'] || keys['d'] || keys['D']) {
+                const speed = keys['Shift'] ? MAX_SPEED * SPRINT_MULTIPLIER : MAX_SPEED;
+                player.velX = speed;
+            } else {
+                player.velX *= FRICTION;
+            }
+            
+            // Jumping
+            if ((keys[' '] || keys['ArrowUp'] || keys['w'] || keys['W']) && !player.isJumping) {
+                player.velY = JUMP_FORCE;
+                player.isJumping = true;
+                player.jumps++;
+                totalJumps++;
+                updateUI();
+            }
+            
+            // Apply air resistance when in air
+            if (player.isJumping) {
+                player.velX *= AIR_RESISTANCE;
+            }
+            
+            // Limit speed
+            player.velX = Math.max(-MAX_SPEED * 2, Math.min(MAX_SPEED * 2, player.velX));
+            player.velY = Math.max(-JUMP_FORCE * 1.5, Math.min(JUMP_FORCE * 3, player.velY));
+            
+            // Update position
+            player.x += player.velX;
+            player.y += player.velY;
+            
+            // Check collisions with platforms
+            let onPlatform = false;
+            platforms.forEach(platform => {
+                if (checkCollision(player, platform)) {
+                    // Collision from top
+                    if (player.velY > 0 && player.y + player.height - player.velY <= platform.y) {
+                        player.y = platform.y - player.height;
+                        player.velY = 0;
+                        player.isJumping = false;
+                        onPlatform = true;
+                    }
+                    // Collision from bottom
+                    else if (player.velY < 0 && player.y - player.velY >= platform.y + platform.height) {
+                        player.y = platform.y + platform.height;
+                        player.velY = 0;
+                    }
+                    // Collision from left
+                    else if (player.velX > 0 && player.x + player.width - player.velX <= platform.x) {
+                        player.x = platform.x - player.width;
+                        player.velX = 0;
+                    }
+                    // Collision from right
+                    else if (player.velX < 0 && player.x - player.velX >= platform.x + platform.width) {
+                        player.x = platform.x + platform.width;
+                        player.velX = 0;
+                    }
+                }
+            });
+            
+            // Check collisions with moving platforms
+            movingPlatforms.forEach(platform => {
+                // Update moving platform position
+                platform.x += platform.velX;
+                platform.y += platform.velY;
+                
+                // Bounce off edges
+                if (platform.x <= 0 || platform.x + platform.width >= canvas.width) {
+                    platform.velX *= -1;
+                }
+                if (platform.y <= platform.minY || platform.y >= platform.maxY) {
+                    platform.velY *= -1;
+                }
+                
+                // Check collision with player
+                if (checkCollision(player, platform)) {
+                    // Collision from top
+                    if (player.velY > 0 && player.y + player.height - player.velY <= platform.y) {
+                        player.y = platform.y - player.height;
+                        player.velY = 0;
+                        player.isJumping = false;
+                        onPlatform = true;
+                        // Move with platform
+                        player.x += platform.velX;
+                    }
+                }
+            });
+            
+            // Check collisions with spikes
+            spikes.forEach(spike => {
+                if (checkCollision(player, spike)) {
+                    die();
+                    return;
+                }
+            });
+            
+            // Check collisions with teleporters
+            teleporters.forEach(tp => {
+                if (checkCollision(player, tp)) {
+                    player.x = tp.targetX;
+                    player.y = tp.targetY;
+                    // Add some visual effect
+                    for (let i = 0; i < 20; i++) {
+                        createParticle(player.x + player.width/2, player.y + player.height/2, '#f0f');
+                    }
+                }
+            });
+            
+            // Check if player fell off screen
+            if (player.y > canvas.height) {
+                die();
+            }
+            
+            // Update player jumping state
+            if (!onPlatform && !player.isJumping) {
+                player.isJumping = true;
+            }
+            
+            // Update UI
+            updateUI();
+        }
+        
+        // Render game
+        function render() {
+            // Clear canvas
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            // Draw platforms
+            ctx.fillStyle = '#333';
+            platforms.forEach(platform => {
+                ctx.fillRect(platform.x, platform.y, platform.width, platform.height);
+            });
+            
+            // Draw moving platforms
+            ctx.fillStyle = '#663';
+            movingPlatforms.forEach(platform => {
+                ctx.fillRect(platform.x, platform.y, platform.width, platform.height);
+            });
+            
+            // Draw spikes
+            ctx.fillStyle = '#f00';
+            spikes.forEach(spike => {
+                ctx.beginPath();
+                ctx.moveTo(spike.x + spike.width/2, spike.y);
+                ctx.lineTo(spike.x, spike.y + spike.height);
+                ctx.lineTo(spike.x + spike.width, spike.y + spike.height);
+                ctx.closePath();
+                ctx.fill();
+            });
+            
+            // Draw teleporters
+            teleporters.forEach(tp => {
+                ctx.fillStyle = '#f0f';
+                ctx.beginPath();
+                ctx.arc(tp.x + tp.width/2, tp.y + tp.height/2, tp.width/2, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.fillStyle = '#fff';
+                ctx.beginPath();
+                ctx.arc(tp.x + tp.width/2, tp.y + tp.height/2, tp.width/4, 0, Math.PI * 2);
+                ctx.fill();
+            });
+            
+            // Draw player
+            ctx.fillStyle = player.color;
+            ctx.fillRect(player.x, player.y, player.width, player.height);
+            
+            // Draw eyes to indicate direction
+            ctx.fillStyle = '#000';
+            const eyeOffset = player.velX > 0 ? 5 : -5;
+            ctx.beginPath();
+            ctx.arc(
+                player.x + player.width/2 + (player.velX > 0 ? 5 : -5), 
+                player.y + player.height/3, 
+                3, 0, Math.PI * 2
+            );
+            ctx.fill();
+            
+            // Level complete overlay
+            if (levelComplete) {
+                document.getElementById('level-complete').style.opacity = '1';
+            } else {
+                document.getElementById('level-complete').style.opacity = '0';
+            }
+        }
+        
+        // Check collision between two objects
+        function checkCollision(obj1, obj2) {
+            return obj1.x < obj2.x + obj2.width &&
+                   obj1.x + obj1.width > obj2.x &&
+                   obj1.y < obj2.y + obj2.height &&
+                   obj1.y + obj1.height > obj2.y;
+        }
+        
+        // Player death
+        function die() {
+            player.deaths++;
+            totalDeaths++;
+            updateUI();
+            
+            // Death particles
+            for (let i = 0; i < 30; i++) {
+                createParticle(player.x + player.width/2, player.y + player.height/2, player.color);
+            }
+            
+            // Check for game over (too many deaths)
+            if (player.deaths >= 50) {
+                gameOver();
+                return;
+            }
+            
+            // Reset player position
+            resetPlayer();
+        }
+        
+        // Game over
+        function gameOver() {
+            gameRunning = false;
+            document.getElementById('game-over').style.opacity = '1';
+        }
+        
+        // Reset player position
+        function resetPlayer() {
+            player.x = 50;
+            player.y = 450;
+            player.velX = 0;
+            player.velY = 0;
+            player.isJumping = false;
+        }
+        
+        // Restart game
+        function restartGame() {
+            currentLevel = 1;
+            player.deaths = 0;
+            totalJumps = 0;
+            totalDeaths = 0;
+            gameRunning = true;
+            levelComplete = false;
+            document.getElementById('game-over').style.opacity = '0';
+            loadLevel(currentLevel);
+            updateUI();
+        }
+        
+        // Create particle effect
+        function createParticle(x, y, color) {
+            // Simple particle effect
+            const particle = {
+                x: x,
+                y: y,
+                velX: Math.random() * 6 - 3,
+                velY: Math.random() * 6 - 3,
+                size: Math.random() * 4 + 2,
+                life: Math.random() * 30 + 20,
+                color: color
+            };
+            
+            // Draw particle
+            ctx.fillStyle = particle.color;
+            ctx.globalAlpha = particle.life / 50;
+            ctx.beginPath();
+            ctx.arc(particle.x, particle.y, particle.size, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.globalAlpha = 1;
+        }
+        
+        // Update UI elements
+        function updateUI() {
+            document.getElementById('speed-display').textContent = Math.abs(player.velX).toFixed(1);
+            document.getElementById('jumps-display').textContent = totalJumps;
+            document.getElementById('death-counter').textContent = `DEATHS: ${totalDeaths}`;
+            document.getElementById('level-indicator').textContent = `LEVEL ${currentLevel}`;
+        }
+        
+        // Load level
+        function loadLevel(level) {
+            // Reset level elements
+            platforms = [];
+            spikes = [];
+            movingPlatforms = [];
+            teleporters = [];
+            
+            // Reset player
+            resetPlayer();
+            
+            // Common platform colors
+            const platformColor = '#333';
+            const movingColor = '#663';
+            const spikeColor = '#f00';
+            const teleporterColor = '#f0f';
+            
+            // Level designs
+            switch (level) {
+                case 1:
+                    // Level 1 - Basic introduction
+                    platforms.push({ x: 0, y: 480, width: 300, height: 20, color: platformColor });
+                    platforms.push({ x: 350, y: 400, width: 100, height: 20, color: platformColor });
+                    platforms.push({ x: 500, y: 350, width: 100, height: 20, color: platformColor });
+                    platforms.push({ x: 650, y: 300, width: 150, height: 20, color: platformColor });
+                    platforms.push({ x: 0, y: 200, width: 100, height: 20, color: platformColor });
+                    platforms.push({ x: 150, y: 150, width: 100, height: 20, color: platformColor });
+                    platforms.push({ x: 300, y: 100, width: 100, height: 20, color: platformColor });
+                    platforms.push({ x: 450, y: 50, width: 350, height: 20, color: platformColor });
+                    
+                    // Add some spikes
+                    spikes.push({ x: 300, y: 460, width: 20, height: 20, color: spikeColor });
+                    spikes.push({ x: 450, y: 380, width: 20, height: 20, color: spikeColor });
+                    spikes.push({ x: 600, y: 330, width: 20, height: 20, color: spikeColor });
+                    
+                    // Goal is the top right platform
+                    break;
+                    
+                case 2:
+                    // Level 2 - Precision jumping
+                    platforms.push({ x: 0, y: 480, width: 100, height: 20, color: platformColor });
+                    platforms.push({ x: 150, y: 480, width: 100, height: 20, color: platformColor });
+                    platforms.push({ x: 300, y: 480, width: 100, height: 20, color: platformColor });
+                    platforms.push({ x: 450, y: 480, width: 100, height: 20, color: platformColor });
+                    platforms.push({ x: 600, y: 480, width: 100, height: 20, color: platformColor });
+                    platforms.push({ x: 750, y: 480, width: 50, height: 20, color: platformColor });
+                    
+                    // Vertical platforms
+                    platforms.push({ x: 100, y: 380, width: 20, height: 100, color: platformColor });
+                    platforms.push({ x: 250, y: 280, width: 20, height: 100, color: platformColor });
+                    platforms.push({ x: 400, y: 180, width: 20, height: 100, color: platformColor });
+                    platforms.push({ x: 550, y: 80, width: 20, height: 100, color: platformColor });
+                    
+                    // Many spikes
+                    for (let i = 0; i < 7; i++) {
+                        spikes.push({ x: 100 + i * 150, y: 460, width: 20, height: 20, color: spikeColor });
+                    }
+                    
+                    // Moving platform
+                    movingPlatforms.push({ 
+                        x: 700, y: 200, width: 80, height: 20, 
+                        velX: 3, velY: 0, minY: 200, maxY: 200,
+                        color: movingColor 
+                    });
+                    
+                    // Goal is the top of the vertical platforms
+                    break;
+                    
+                case 3:
+                    // Level 3 - Moving platforms and spikes
+                    platforms.push({ x: 0, y: 480, width: 100, height: 20, color: platformColor });
+                    
+                    // Moving platforms
+                    movingPlatforms.push({ 
+                        x: 150, y: 400, width: 80, height: 20, 
+                        velX: 2, velY: 0, minY: 400, maxY: 400,
+                        color: movingColor 
+                    });
+                    
+                    movingPlatforms.push({ 
+                        x: 300, y: 350, width: 80, height: 20, 
+                        velX: 0, velY: 2, minY: 300, maxY: 400,
+                        color: movingColor 
+                    });
+                    
+                    movingPlatforms.push({ 
+                        x: 450, y: 300, width: 80, height: 20, 
+                        velX: -3, velY: 0, minY: 300, maxY: 300,
+                        color: movingColor 
+                    });
+                    
+                    movingPlatforms.push({ 
+                        x: 600, y: 250, width: 80, height: 20, 
+                        velX: 0, velY: -2.5, minY: 200, maxY: 300,
+                        color: movingColor 
+                    });
+                    
+                    // Spikes everywhere
+                    for (let i = 0; i < 8; i++) {
+                        spikes.push({ x: 100 + i * 80, y: 460, width: 20, height: 20, color: spikeColor });
+                    }
+                    
+                    // Final platform
+                    platforms.push({ x: 700, y: 150, width: 100, height: 20, color: platformColor });
+                    
+                    // Goal is the final platform
+                    break;
+                    
+                case 4:
+                    // Level 4 - Teleporters and tight spaces
+                    platforms.push({ x: 0, y: 480, width: 100, height: 20, color: platformColor });
+                    
+                    // Teleporters
+                    teleporters.push({ 
+                        x: 150, y: 400, width: 40, height: 40,
+                        targetX: 650, targetY: 100,
+                        color: teleporterColor 
+                    });
+                    
+                    teleporters.push({ 
+                        x: 650, y: 400, width: 40, height: 40,
+                        targetX: 150, targetY: 100,
+                        color: teleporterColor 
+                    });
+                    
+                    // Narrow platforms
+                    platforms.push({ x: 200, y: 350, width: 20, height: 20, color: platformColor });
+                    platforms.push({ x: 250, y: 300, width: 20, height: 20, color: platformColor });
+                    platforms.push({ x: 300, y: 250, width: 20, height: 20, color: platformColor });
+                    platforms.push({ x: 350, y: 200, width: 20, height: 20, color: platformColor });
+                    platforms.push({ x: 400, y: 150, width: 20, height: 20, color: platformColor });
+                    
+                    // Spikes in tricky places
+                    spikes.push({ x: 180, y: 370, width: 20, height: 20, color: spikeColor });
+                    spikes.push({ x: 230, y: 320, width: 20, height: 20, color: spikeColor });
+                    spikes.push({ x: 280, y: 270, width: 20, height: 20, color: spikeColor });
+                    spikes.push({ x: 330, y: 220, width: 20, height: 20, color: spikeColor });
+                    spikes.push({ x: 380, y: 170, width: 20, height: 20, color: spikeColor });
+                    
+                    // Final platform
+                    platforms.push({ x: 700, y: 50, width: 100, height: 20, color: platformColor });
+                    
+                    // Goal is the final platform
+                    break;
+                    
+                case 5:
+                    // Level 5 - The Ultimate Challenge
+                    platforms.push({ x: 0, y: 480, width: 50, height: 20, color: platformColor });
+                    
+                    // Complex moving platform pattern
+                    movingPlatforms.push({ 
+                        x: 100, y: 400, width: 60, height: 20, 
+                        velX: 2, velY: 1.5, minY: 300, maxY: 450,
+                        color: movingColor 
+                    });
+                    
+                    movingPlatforms.push({ 
+                        x: 250, y: 350, width: 60, height: 20, 
+                        velX: -2.5, velY: -1, minY: 200, maxY: 400,
+                        color: movingColor 
+                    });
+                    
+                    movingPlatforms.push({ 
+                        x: 400, y: 250, width: 60, height: 20, 
+                        velX: 3, velY: 2, minY: 150, maxY: 350,
+                        color: movingColor 
+                    });
+                    
+                    movingPlatforms.push({ 
+                        x: 550, y: 200, width: 60, height: 20, 
+                        velX: -3.5, velY: -1.5, minY: 100, maxY: 300,
+                        color: movingColor 
+                    });
+                    
+                    // Teleport maze
+                    teleporters.push({ 
+                        x: 200, y: 100, width: 30, height: 30,
+                        targetX: 600, targetY: 100,
+                        color: teleporterColor 
+                    });
+                    
+                    teleporters.push({ 
+                        x: 600, y: 100, width: 30, height: 30,
+                        targetX: 200, targetY: 300,
+                        color: teleporterColor 
+                    });
+                    
+                    teleporters.push({ 
+                        x: 200, y: 300, width: 30, height: 30,
+                        targetX: 400, targetY: 50,
+                        color: teleporterColor 
+                    });
+                    
+                    // Spikes everywhere
+                    for (let i = 0; i < 15; i++) {
+                        spikes.push({ x: 50 + i * 50, y: 460, width: 15, height: 20, color: spikeColor });
+                    }
+                    
+                    // Final platform
+                    platforms.push({ x: 700, y: 50, width: 100, height: 20, color: platformColor });
+                    
+                    // Goal is the final platform
+                    break;
+            }
+            
+            // Update UI
+            updateUI();
+        }
+        
+        // Check level completion (called when player reaches goal)
+        function completeLevel() {
+            levelComplete = true;
+            player.deaths = 0; // Reset death counter for next level
+            
+            // Show level complete message
+            document.getElementById('level-complete').style.opacity = '1';
+        }
+        
+        // Initialize game when page loads
+        window.onload = init;
+        
+        // Python-like functions (conceptual - would need Pyodide to actually run Python)
+        /* 
+        # This is conceptual Python code that would mirror some game logic
+        def check_collision_py(obj1, obj2):
+            return (obj1['x'] < obj2['x'] + obj2['width'] and
+                    obj1['x'] + obj1['width'] > obj2['x'] and
+                    obj1['y'] < obj2['y'] + obj2['height'] and
+                    obj1['y'] + obj1['height'] > obj2['y'])
+        
+        def update_player_py(player, keys):
+            # Simplified Python version of player update
+            player['velY'] += GRAVITY
+            
+            if keys.get('left', False):
+                player['velX'] = -MAX_SPEED
+            elif keys.get('right', False):
+                player['velX'] = MAX_SPEED
+            else:
+                player['velX'] *= FRICTION
+            
+            if keys.get('jump', False) and not player['isJumping']:
+                player['velY'] = JUMP_FORCE
+                player['isJumping'] = True
+            
+            player['x'] += player['velX']
+            player['y'] += player['velY']
+            return player
+        */
+    </script>
+</body>
+</html>
